@@ -8,10 +8,10 @@ import (
 	"io"
 	"net/http"
 	"strings"
-	"time"
 
 	"github.com/yunzhu457/CCode/internal/config"
 	"github.com/yunzhu457/CCode/internal/provider"
+	providershared "github.com/yunzhu457/CCode/internal/provider/shared"
 	providerstream "github.com/yunzhu457/CCode/internal/provider/stream"
 	"github.com/yunzhu457/CCode/internal/sse"
 )
@@ -24,7 +24,7 @@ type Client struct {
 }
 
 func New(cfg config.Config) *Client {
-	return &Client{cfg: cfg, httpClient: &http.Client{}}
+	return &Client{cfg: cfg, httpClient: providershared.NewHTTPClient()}
 }
 
 func (c *Client) Name() string {
@@ -74,7 +74,7 @@ func (c *Client) Stream(ctx context.Context, req provider.ChatRequest, emit prov
 	defer resp.Body.Close()
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return fmt.Errorf("anthropic request failed: status %d: %s", resp.StatusCode, readLimited(resp.Body))
+		return providershared.HTTPStatusError("anthropic", resp)
 	}
 
 	reader := sse.NewReader(resp.Body)
@@ -83,7 +83,7 @@ func (c *Client) Stream(ctx context.Context, req provider.ChatRequest, emit prov
 	var stopReason string
 	var usage *provider.Usage
 	for {
-		event, err := providerstream.NextEvent(ctx, reader, idleTimeout(c.cfg), resp.Body.Close)
+		event, err := providerstream.NextEvent(ctx, reader, providershared.IdleTimeout(c.cfg), resp.Body.Close)
 		if err == io.EOF {
 			return emit(provider.StreamEvent{Type: provider.EventStreamEnd, StopReason: stopReason, Usage: usage})
 		}
@@ -275,7 +275,7 @@ func anthropicTools(tools []provider.ToolSchema) []anthropicTool {
 		out = append(out, anthropicTool{
 			Name:        tool.Name,
 			Description: tool.Description,
-			InputSchema: toolInputSchema(tool.InputSchema),
+			InputSchema: providershared.ToolInputSchema(tool.InputSchema),
 		})
 	}
 	return out
@@ -303,13 +303,6 @@ func maxTokens(value int) int {
 	return defaultMaxTokens
 }
 
-func idleTimeout(cfg config.Config) time.Duration {
-	if cfg.Stream != nil {
-		return cfg.Stream.IdleTimeout
-	}
-	return 0
-}
-
 func anthropicEndpoint(baseURL string) string {
 	base := strings.TrimRight(baseURL, "/")
 	if strings.HasSuffix(base, "/v1/messages") {
@@ -327,20 +320,4 @@ func anthropicUsage(usage *anthropicUsagePayload) *provider.Usage {
 		OutputTokens: usage.OutputTokens,
 		TotalTokens:  usage.InputTokens + usage.OutputTokens,
 	}
-}
-
-func toolInputSchema(schema json.RawMessage) json.RawMessage {
-	if len(schema) > 0 {
-		return schema
-	}
-	return json.RawMessage(`{"type":"object"}`)
-}
-
-func readLimited(r io.Reader) string {
-	const max = 4096
-	data, err := io.ReadAll(io.LimitReader(r, max))
-	if err != nil {
-		return "failed to read response body"
-	}
-	return strings.TrimSpace(string(data))
 }
