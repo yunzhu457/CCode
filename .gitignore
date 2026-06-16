@@ -8,6 +8,7 @@ configs/*.local.yaml
 bin/
 dist/
 *.test
+/ccode
 
 # Editor and OS noise.
 .DS_Store
