@@ -108,6 +108,42 @@ func TestAppWrapsLongAssistantTextAndCleansMarkdown(t *testing.T) {
 	}
 }
 
+func TestAppShowsCompactStreamStatusEvents(t *testing.T) {
+	fake := &fakeProvider{events: []provider.StreamEvent{
+		{Type: provider.EventThinkingDelta, Thinking: "hidden reasoning"},
+		{Type: provider.EventThinkingComplete, ThinkingSignature: "sig_123"},
+		{Type: provider.EventToolCallStart, ToolCall: provider.ToolCallEvent{Index: 0, ID: "toolu_1", Name: "read_file"}},
+		{Type: provider.EventToolCallDelta, ToolCall: provider.ToolCallEvent{Index: 0, ArgumentsDelta: `{"path":"`}},
+		{Type: provider.EventToolCallComplete, ToolCall: provider.ToolCallEvent{Index: 0, Arguments: `{"path":"main.go"}`}},
+		{Type: provider.EventTextDelta, Text: "Done"},
+		{Type: provider.EventUsage, Usage: &provider.Usage{InputTokens: 10, OutputTokens: 4, TotalTokens: 14}},
+		{Type: provider.EventStreamEnd, StopReason: "tool_use", Usage: &provider.Usage{InputTokens: 10, OutputTokens: 4, TotalTokens: 14}},
+	}}
+	input := strings.NewReader("hello\n/exit\n")
+	output := new(strings.Builder)
+
+	app := New(input, output, chat.NewSession(), fake)
+	if err := app.Run(context.Background()); err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+
+	out := output.String()
+	assertContains(t, out, "╭─ thinking")
+	assertContains(t, out, "completed")
+	assertContains(t, out, "╭─ tool · read_file")
+	assertContains(t, out, `args: {"path":"main.go"} · completed`)
+	assertContains(t, out, "╭─ assistant")
+	assertContains(t, out, "Done")
+	assertContains(t, out, "╭─ usage")
+	assertContains(t, out, "stop: tool_use · input: 10 · output: 4 · total: 14")
+	if strings.Contains(out, "hidden reasoning") {
+		t.Fatalf("compact UI should not show raw thinking: %q", out)
+	}
+	if strings.Contains(out, "sig_123") {
+		t.Fatalf("compact UI should not show thinking signature: %q", out)
+	}
+}
+
 func TestInteractiveInputEndDoesNotAddExtraBlankLine(t *testing.T) {
 	output := new(strings.Builder)
 	app := New(strings.NewReader(""), output, chat.NewSession(), &fakeProvider{})
@@ -163,6 +199,7 @@ type fakeProvider struct {
 	requests []provider.ChatRequest
 	err      error
 	chunks   []string
+	events   []provider.StreamEvent
 }
 
 func (f *fakeProvider) Name() string {
@@ -170,7 +207,7 @@ func (f *fakeProvider) Name() string {
 }
 
 func (f *fakeProvider) Stream(_ context.Context, session *chat.Session, tools []provider.ToolSchema) (<-chan provider.StreamEvent, <-chan error) {
-	events := make(chan provider.StreamEvent, len(f.chunks)+4)
+	events := make(chan provider.StreamEvent, len(f.chunks)+len(f.events)+4)
 	errs := make(chan error, 1)
 
 	f.stream(session, tools, events, errs)
@@ -185,6 +222,12 @@ func (f *fakeProvider) stream(session *chat.Session, tools []provider.ToolSchema
 	f.requests = append(f.requests, req)
 	if f.err != nil {
 		errs <- f.err
+		return
+	}
+	if len(f.events) > 0 {
+		for _, event := range f.events {
+			events <- event
+		}
 		return
 	}
 	chunks := f.chunks

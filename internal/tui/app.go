@@ -12,7 +12,6 @@ import (
 
 	"github.com/yunzhu457/CCode/internal/chat"
 	"github.com/yunzhu457/CCode/internal/llm"
-	"github.com/yunzhu457/CCode/internal/provider"
 )
 
 type App struct {
@@ -68,28 +67,24 @@ func (a *App) Run(ctx context.Context) error {
 
 func (a *App) send(ctx context.Context, text string) error {
 	a.session.AddUserMessage(text)
-	var response strings.Builder
 
-	stream := a.beginStreamBox("assistant")
+	renderer := newStreamRenderer(a)
 	events, errs := a.client.Stream(ctx, a.session, nil)
 	for event := range events {
-		switch event.Type {
-		case provider.EventTextDelta:
-			response.WriteString(event.Text)
-			if err := stream.Write(event.Text); err != nil {
-				stream.Close()
-				return err
-			}
-		case provider.EventThinkingDelta:
+		if err := renderer.Handle(event); err != nil {
+			renderer.Close()
+			return err
 		}
 	}
-	stream.Close()
+	if err := renderer.Close(); err != nil {
+		return err
+	}
 	for err := range errs {
 		if err != nil {
 			return err
 		}
 	}
-	a.session.AddAssistantMessage(response.String())
+	a.session.AddAssistantMessage(renderer.Response())
 	return nil
 }
 
