@@ -2,7 +2,7 @@
 
 - [ ] `go test ./...` 通过。
 - [ ] `go build ./cmd/ccode` 能生成可运行的 CLI 二进制文件。
-- [ ] `configs/example.yaml` 包含必填字段 `protocol`、`model`、`base_url`、`api_key`。
+- [ ] `configs/config.example.yaml` 包含必填字段 `protocol`、`model`、`base_url`、`api_key`。
 - [ ] 配置文件缺少 `protocol` 时，配置加载器会拒绝启动。
 - [ ] 配置文件缺少 `model` 时，配置加载器会拒绝启动。
 - [ ] 配置文件缺少 `base_url` 时，配置加载器会拒绝启动。

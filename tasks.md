@@ -8,7 +8,7 @@
   - 参考位置：`spec.md`
 
 - [ ] 2. 定义配置模型和示例 YAML
-  - 影响文件：`internal/config/config.go`、`internal/config/config_test.go`、`configs/example.yaml`、`.gitignore`
+  - 影响文件：`internal/config/config.go`、`internal/config/config_test.go`、`configs/config.example.yaml`、`configs/chatgpt-relay.example.yaml`、`.gitignore`
   - 依赖任务：任务 1
   - 参考位置：`spec.md` 中的 YAML 配置要求
 
@@ -63,7 +63,7 @@
   - 参考位置：`spec.md` 中的非功能要求
 
 - [ ] 13. 接入主流程
-  - 影响文件：`cmd/ccode/main.go`、`README.md`、`configs/example.yaml`
+  - 影响文件：`cmd/ccode/main.go`、`README.md`、`configs/config.example.yaml`
   - 依赖任务：任务 1 至任务 12
   - 参考位置：`spec.md` 中的启动和使用流程
 

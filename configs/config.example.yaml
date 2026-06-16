@@ -1,0 +1,7 @@
+# Copy this file to configs/config.local.yaml and fill in your own credentials.
+# Do not commit configs/*.local.yaml.
+
+protocol: openai
+model: deepseek-v4-flash
+base_url: https://api.deepseek.com
+api_key: YOUR_API_KEY_HERE

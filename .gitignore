@@ -1,0 +1,13 @@
+# Local runtime configuration and secrets.
+config.local.yaml
+configs/*.local.yaml
+.env
+.env.*
+
+# Build outputs.
+bin/
+dist/
+*.test
+
+# Editor and OS noise.
+.DS_Store
