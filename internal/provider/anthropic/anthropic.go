@@ -4,7 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"fmt"
+	"errors"
 	"io"
 	"net/http"
 	"strings"
@@ -55,12 +55,12 @@ func (c *Client) Stream(ctx context.Context, req provider.ChatRequest, emit prov
 
 	body, err := json.Marshal(payload)
 	if err != nil {
-		return fmt.Errorf("encode anthropic request: %w", err)
+		return providershared.WrapLLMError("anthropic", "encode anthropic request", err)
 	}
 
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, anthropicEndpoint(c.cfg.BaseURL), bytes.NewReader(body))
 	if err != nil {
-		return fmt.Errorf("create anthropic request: %w", err)
+		return providershared.WrapNetworkError("anthropic", "create anthropic request", err)
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
 	httpReq.Header.Set("Accept", "text/event-stream")
@@ -69,7 +69,7 @@ func (c *Client) Stream(ctx context.Context, req provider.ChatRequest, emit prov
 
 	resp, err := c.httpClient.Do(httpReq)
 	if err != nil {
-		return fmt.Errorf("send anthropic request: %w", err)
+		return providershared.WrapNetworkError("anthropic", "send anthropic request", err)
 	}
 	defer resp.Body.Close()
 
@@ -88,7 +88,10 @@ func (c *Client) Stream(ctx context.Context, req provider.ChatRequest, emit prov
 			return emit(provider.StreamEvent{Type: provider.EventStreamEnd, StopReason: stopReason, Usage: usage})
 		}
 		if err != nil {
-			return fmt.Errorf("read anthropic stream: %w", err)
+			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+				return err
+			}
+			return providershared.WrapNetworkError("anthropic", "read anthropic stream", err)
 		}
 		if event.Data == "" {
 			continue
@@ -96,10 +99,10 @@ func (c *Client) Stream(ctx context.Context, req provider.ChatRequest, emit prov
 
 		var chunk streamChunk
 		if err := json.Unmarshal([]byte(event.Data), &chunk); err != nil {
-			return fmt.Errorf("decode anthropic stream event: %w", err)
+			return providershared.WrapLLMError("anthropic", "decode anthropic stream event", err)
 		}
 		if chunk.Type == "error" && chunk.Error != nil {
-			return fmt.Errorf("anthropic stream error: %s: %s", chunk.Error.Type, chunk.Error.Message)
+			return providershared.ProviderError("anthropic", chunk.Error.Type, chunk.Error.Message)
 		}
 		switch chunk.Type {
 		case "message_start":

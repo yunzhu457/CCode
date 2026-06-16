@@ -3,6 +3,7 @@ package openai
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -11,6 +12,7 @@ import (
 	"time"
 
 	"github.com/yunzhu457/CCode/internal/config"
+	"github.com/yunzhu457/CCode/internal/llmerr"
 	"github.com/yunzhu457/CCode/internal/provider"
 )
 
@@ -159,11 +161,42 @@ func TestClientReturnsHTTPError(t *testing.T) {
 	if err == nil {
 		t.Fatal("Stream() error = nil, want HTTP error")
 	}
+	var authErr *llmerr.AuthenticationError
+	if !errors.As(err, &authErr) {
+		t.Fatalf("Stream() error = %T, want AuthenticationError", err)
+	}
 	if !strings.Contains(err.Error(), "status 401") {
 		t.Fatalf("error = %q, want status", err)
 	}
 	if strings.Contains(err.Error(), "secret") {
 		t.Fatalf("error leaked API key: %v", err)
+	}
+}
+
+func TestClientReturnsRateLimitError(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Retry-After", "7")
+		http.Error(w, "rate limit exceeded", http.StatusTooManyRequests)
+	}))
+	defer server.Close()
+
+	client := New(config.Config{Protocol: config.ProtocolOpenAI, Model: "m", BaseURL: server.URL, APIKey: "k"})
+
+	err := client.Stream(context.Background(), provider.ChatRequest{
+		Messages: []provider.Message{{Role: provider.RoleUser, Content: "hi"}},
+	}, func(provider.StreamEvent) error {
+		return nil
+	})
+	if err == nil {
+		t.Fatal("Stream() error = nil, want rate limit error")
+	}
+
+	var rateErr *llmerr.RateLimitError
+	if !errors.As(err, &rateErr) {
+		t.Fatalf("Stream() error = %T, want RateLimitError", err)
+	}
+	if rateErr.RetryAfter != 7*time.Second {
+		t.Fatalf("RetryAfter = %s", rateErr.RetryAfter)
 	}
 }
 
@@ -183,6 +216,10 @@ func TestClientRejectsInvalidStreamJSON(t *testing.T) {
 	})
 	if err == nil {
 		t.Fatal("Stream() error = nil, want JSON error")
+	}
+	var llmErr *llmerr.LLMError
+	if !errors.As(err, &llmErr) {
+		t.Fatalf("Stream() error = %T, want LLMError", err)
 	}
 }
 
@@ -216,6 +253,10 @@ func TestClientReturnsIdleTimeoutWhenStreamStalls(t *testing.T) {
 	})
 	if err == nil {
 		t.Fatal("Stream() error = nil, want idle timeout")
+	}
+	var networkErr *llmerr.NetworkError
+	if !errors.As(err, &networkErr) {
+		t.Fatalf("Stream() error = %T, want NetworkError", err)
 	}
 	if !strings.Contains(err.Error(), "network idle timeout") {
 		t.Fatalf("error = %q, want idle timeout", err)

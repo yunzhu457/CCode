@@ -3,6 +3,7 @@ package anthropic
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -11,6 +12,7 @@ import (
 	"time"
 
 	"github.com/yunzhu457/CCode/internal/config"
+	"github.com/yunzhu457/CCode/internal/llmerr"
 	"github.com/yunzhu457/CCode/internal/provider"
 )
 
@@ -172,6 +174,10 @@ func TestClientReturnsStreamError(t *testing.T) {
 	if err == nil {
 		t.Fatal("Stream() error = nil, want stream error")
 	}
+	var llmErr *llmerr.LLMError
+	if !errors.As(err, &llmErr) {
+		t.Fatalf("Stream() error = %T, want LLMError", err)
+	}
 	if !strings.Contains(err.Error(), "overloaded_error") {
 		t.Fatalf("error = %q, want overloaded_error", err)
 	}
@@ -193,11 +199,38 @@ func TestClientReturnsHTTPError(t *testing.T) {
 	if err == nil {
 		t.Fatal("Stream() error = nil, want HTTP error")
 	}
+	var authErr *llmerr.AuthenticationError
+	if !errors.As(err, &authErr) {
+		t.Fatalf("Stream() error = %T, want AuthenticationError", err)
+	}
 	if !strings.Contains(err.Error(), "status 401") {
 		t.Fatalf("error = %q, want status", err)
 	}
 	if strings.Contains(err.Error(), "secret") {
 		t.Fatalf("error leaked API key: %v", err)
+	}
+}
+
+func TestClientReturnsContextTooLongError(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "maximum context length exceeded", http.StatusBadRequest)
+	}))
+	defer server.Close()
+
+	client := New(config.Config{Protocol: config.ProtocolAnthropic, Model: "m", BaseURL: server.URL, APIKey: "k"})
+
+	err := client.Stream(context.Background(), provider.ChatRequest{
+		Messages: []provider.Message{{Role: provider.RoleUser, Content: "hi"}},
+	}, func(provider.StreamEvent) error {
+		return nil
+	})
+	if err == nil {
+		t.Fatal("Stream() error = nil, want context too long error")
+	}
+
+	var contextErr *llmerr.ContextTooLongError
+	if !errors.As(err, &contextErr) {
+		t.Fatalf("Stream() error = %T, want ContextTooLongError", err)
 	}
 }
 
@@ -231,6 +264,10 @@ func TestClientReturnsIdleTimeoutWhenStreamStalls(t *testing.T) {
 	})
 	if err == nil {
 		t.Fatal("Stream() error = nil, want idle timeout")
+	}
+	var networkErr *llmerr.NetworkError
+	if !errors.As(err, &networkErr) {
+		t.Fatalf("Stream() error = %T, want NetworkError", err)
 	}
 	if !strings.Contains(err.Error(), "network idle timeout") {
 		t.Fatalf("error = %q, want idle timeout", err)

@@ -4,7 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"fmt"
+	"errors"
 	"io"
 	"net/http"
 	"strings"
@@ -41,12 +41,12 @@ func (c *Client) Stream(ctx context.Context, req provider.ChatRequest, emit prov
 		StreamOptions: streamOptions{IncludeUsage: true},
 	})
 	if err != nil {
-		return fmt.Errorf("encode openai request: %w", err)
+		return providershared.WrapLLMError("openai", "encode openai request", err)
 	}
 
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, openAIEndpoint(c.cfg.BaseURL), bytes.NewReader(body))
 	if err != nil {
-		return fmt.Errorf("create openai request: %w", err)
+		return providershared.WrapNetworkError("openai", "create openai request", err)
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
 	httpReq.Header.Set("Accept", "text/event-stream")
@@ -54,7 +54,7 @@ func (c *Client) Stream(ctx context.Context, req provider.ChatRequest, emit prov
 
 	resp, err := c.httpClient.Do(httpReq)
 	if err != nil {
-		return fmt.Errorf("send openai request: %w", err)
+		return providershared.WrapNetworkError("openai", "send openai request", err)
 	}
 	defer resp.Body.Close()
 
@@ -75,7 +75,10 @@ func (c *Client) Stream(ctx context.Context, req provider.ChatRequest, emit prov
 			return emit(provider.StreamEvent{Type: provider.EventStreamEnd, StopReason: stopReason, Usage: usage})
 		}
 		if err != nil {
-			return fmt.Errorf("read openai stream: %w", err)
+			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+				return err
+			}
+			return providershared.WrapNetworkError("openai", "read openai stream", err)
 		}
 		if strings.TrimSpace(event.Data) == "[DONE]" {
 			if err := completeOpenAIToolCalls(toolCalls, emit); err != nil {
@@ -89,7 +92,7 @@ func (c *Client) Stream(ctx context.Context, req provider.ChatRequest, emit prov
 
 		var chunk chatCompletionChunk
 		if err := json.Unmarshal([]byte(event.Data), &chunk); err != nil {
-			return fmt.Errorf("decode openai stream event: %w", err)
+			return providershared.WrapLLMError("openai", "decode openai stream event", err)
 		}
 		if chunk.Usage != nil {
 			usage = openAIUsage(chunk.Usage)
