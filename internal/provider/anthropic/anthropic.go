@@ -8,9 +8,11 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/yunzhu457/CCode/internal/config"
 	"github.com/yunzhu457/CCode/internal/provider"
+	providerstream "github.com/yunzhu457/CCode/internal/provider/stream"
 	"github.com/yunzhu457/CCode/internal/sse"
 )
 
@@ -81,7 +83,7 @@ func (c *Client) Stream(ctx context.Context, req provider.ChatRequest, emit prov
 	var stopReason string
 	var usage *provider.Usage
 	for {
-		event, err := reader.Next()
+		event, err := providerstream.NextEvent(ctx, reader, idleTimeout(c.cfg), resp.Body.Close)
 		if err == io.EOF {
 			return emit(provider.StreamEvent{Type: provider.EventStreamEnd, StopReason: stopReason, Usage: usage})
 		}
@@ -299,6 +301,13 @@ func maxTokens(value int) int {
 		return value
 	}
 	return defaultMaxTokens
+}
+
+func idleTimeout(cfg config.Config) time.Duration {
+	if cfg.Stream != nil {
+		return cfg.Stream.IdleTimeout
+	}
+	return 0
 }
 
 func anthropicEndpoint(baseURL string) string {

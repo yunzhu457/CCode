@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestLoadValidConfig(t *testing.T) {
@@ -101,6 +102,8 @@ model: claude-sonnet-4-6
 base_url: https://api.anthropic.com
 api_key: test-key
 max_tokens: 4096
+stream:
+  idle_timeout: 45s
 thinking:
   enabled: true
   budget_tokens: 1024
@@ -123,6 +126,12 @@ thinking:
 	}
 	if cfg.MaxTokens != 4096 {
 		t.Fatalf("MaxTokens = %d", cfg.MaxTokens)
+	}
+	if cfg.Stream == nil {
+		t.Fatal("Stream config was not loaded")
+	}
+	if cfg.Stream.IdleTimeout != 45*time.Second {
+		t.Fatalf("IdleTimeout = %s", cfg.Stream.IdleTimeout)
 	}
 	if cfg.Provider != ProviderAnthropic {
 		t.Fatalf("Provider = %q", cfg.Provider)
@@ -200,6 +209,18 @@ base_url: https://example.test
 api_key: k
 `,
 			want: "unsupported api",
+		},
+		{
+			name: "stream idle timeout",
+			content: `
+protocol: openai
+model: m
+base_url: https://example.test
+api_key: k
+stream:
+  idle_timeout: -1s
+`,
+			want: "stream idle_timeout must be non-negative",
 		},
 	}
 

@@ -8,3 +8,5 @@ api: auto
 model: deepseek-v4-flash
 base_url: https://api.deepseek.com/anthropic
 api_key: YOUR_API_KEY_HERE
+stream:
+  idle_timeout: 30s

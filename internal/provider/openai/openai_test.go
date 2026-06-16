@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/yunzhu457/CCode/internal/config"
 	"github.com/yunzhu457/CCode/internal/provider"
@@ -182,6 +183,48 @@ func TestClientRejectsInvalidStreamJSON(t *testing.T) {
 	})
 	if err == nil {
 		t.Fatal("Stream() error = nil, want JSON error")
+	}
+}
+
+func TestClientReturnsIdleTimeoutWhenStreamStalls(t *testing.T) {
+	done := make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer close(done)
+
+		w.Header().Set("Content-Type", "text/event-stream")
+		if flusher, ok := w.(http.Flusher); ok {
+			flusher.Flush()
+		}
+		<-r.Context().Done()
+	}))
+	defer server.Close()
+
+	client := New(config.Config{
+		Protocol: config.ProtocolOpenAI,
+		Model:    "m",
+		BaseURL:  server.URL,
+		APIKey:   "k",
+		Stream: &config.StreamConfig{
+			IdleTimeout: 20 * time.Millisecond,
+		},
+	})
+
+	err := client.Stream(context.Background(), provider.ChatRequest{
+		Messages: []provider.Message{{Role: provider.RoleUser, Content: "hi"}},
+	}, func(provider.StreamEvent) error {
+		return nil
+	})
+	if err == nil {
+		t.Fatal("Stream() error = nil, want idle timeout")
+	}
+	if !strings.Contains(err.Error(), "network idle timeout") {
+		t.Fatalf("error = %q, want idle timeout", err)
+	}
+
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("server request was not canceled after idle timeout")
 	}
 }
 

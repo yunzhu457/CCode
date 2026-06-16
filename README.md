@@ -20,6 +20,8 @@ api: auto
 model: deepseek-v4-flash
 base_url: https://api.deepseek.com/anthropic
 api_key: YOUR_API_KEY_HERE
+stream:
+  idle_timeout: 30s
 ```
 
 也可以参考 `configs/chatgpt-relay.example.yaml` 配置 OpenAI-compatible 中转服务。
@@ -30,6 +32,7 @@ api_key: YOUR_API_KEY_HERE
 - `protocol`: 请求协议，当前支持 `openai` 和 `anthropic`。
 - `compatibility`: `auto` 会自动判断官方或兼容模式；非官方供应商和中转会降级到 compatible。
 - `api`: 默认 `auto`。OpenAI 协议可显式写 `chat_completions` 或 `responses`；Anthropic 协议可写 `messages`。
+- `stream.idle_timeout`: 流式输出的空闲超时。连续一段时间收不到任何 SSE 事件时，会按网络错误退出，避免终端一直卡住。默认 `30s`。
 
 当前版本已经实现 compatible 路径。官方 SDK / OpenAI Responses 的专用路径是预留模式；`auto` 会先使用现有可运行实现，显式写 `compatibility: official` 或 `api: responses` 时会提示该模式尚未实现。
 
@@ -44,6 +47,8 @@ model: claude-sonnet-4-6
 base_url: https://api.anthropic.com
 api_key: YOUR_API_KEY_HERE
 max_tokens: 4096
+stream:
+  idle_timeout: 30s
 thinking:
   enabled: true
   budget_tokens: 1024

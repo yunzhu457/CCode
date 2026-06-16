@@ -8,9 +8,11 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/yunzhu457/CCode/internal/config"
 	"github.com/yunzhu457/CCode/internal/provider"
+	providerstream "github.com/yunzhu457/CCode/internal/provider/stream"
 	"github.com/yunzhu457/CCode/internal/sse"
 )
 
@@ -67,7 +69,7 @@ func (c *Client) Stream(ctx context.Context, req provider.ChatRequest, emit prov
 	var stopReason string
 	var usage *provider.Usage
 	for {
-		event, err := reader.Next()
+		event, err := providerstream.NextEvent(ctx, reader, idleTimeout(c.cfg), resp.Body.Close)
 		if err == io.EOF {
 			if err := completeOpenAIToolCalls(toolCalls, emit); err != nil {
 				return err
@@ -289,6 +291,13 @@ func openAIEndpoint(baseURL string) string {
 		return base
 	}
 	return base + "/chat/completions"
+}
+
+func idleTimeout(cfg config.Config) time.Duration {
+	if cfg.Stream != nil {
+		return cfg.Stream.IdleTimeout
+	}
+	return 0
 }
 
 func readLimited(r io.Reader) string {

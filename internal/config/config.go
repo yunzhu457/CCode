@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"time"
 
 	"gopkg.in/yaml.v3"
 )
@@ -51,7 +52,12 @@ type Config struct {
 	BaseURL       string          `yaml:"base_url"`
 	APIKey        string          `yaml:"api_key"`
 	MaxTokens     int             `yaml:"max_tokens"`
+	Stream        *StreamConfig   `yaml:"stream"`
 	Thinking      *ThinkingConfig `yaml:"thinking"`
+}
+
+type StreamConfig struct {
+	IdleTimeout time.Duration `yaml:"idle_timeout"`
 }
 
 type ThinkingConfig struct {
@@ -110,6 +116,9 @@ func (c Config) Validate() error {
 	case "", APIAuto, APIOpenAIResponses, APIOpenAIChatCompletions, APIAnthropicMessages:
 	default:
 		return fmt.Errorf("unsupported api %q", c.API)
+	}
+	if c.Stream != nil && c.Stream.IdleTimeout < 0 {
+		return fmt.Errorf("stream idle_timeout must be non-negative")
 	}
 	if c.Thinking != nil {
 		if c.Thinking.BudgetTokens < 0 {

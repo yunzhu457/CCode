@@ -8,3 +8,5 @@ api: auto
 model: YOUR_RELAY_MODEL
 base_url: https://your-relay.example.com/v1
 api_key: YOUR_API_KEY_HERE
+stream:
+  idle_timeout: 30s
