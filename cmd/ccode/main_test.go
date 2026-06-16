@@ -25,7 +25,10 @@ api_key: test-key
 		t.Fatalf("run() error = %v", err)
 	}
 
-	if !strings.Contains(out.String(), "C Code (openai)") {
+	if !strings.Contains(out.String(), "C CODE") {
+		t.Fatalf("output = %q", out.String())
+	}
+	if !strings.Contains(out.String(), "provider: openai") {
 		t.Fatalf("output = %q", out.String())
 	}
 	if !strings.Contains(out.String(), "bye") {
@@ -65,7 +68,7 @@ api_key: test-key
 		t.Fatalf("run() error = %v", err)
 	}
 
-	if !strings.Contains(out.String(), "C Code (anthropic)") {
+	if !strings.Contains(out.String(), "provider: anthropic") {
 		t.Fatalf("output = %q", out.String())
 	}
 }

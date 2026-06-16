@@ -20,14 +20,20 @@ func TestAppRunsConversationAndExit(t *testing.T) {
 	}
 
 	out := output.String()
-	if !strings.Contains(out, "You> ") {
-		t.Fatalf("output missing prompt: %q", out)
+	assertContains(t, out, "\x1b[")
+	assertContains(t, out, "C CODE")
+	assertContains(t, out, "streaming chat")
+	assertContains(t, out, "╭─ input")
+	assertContains(t, out, "│ › ")
+	assertContains(t, out, "╭─ assistant")
+	assertContains(t, out, "hi there")
+	assertContains(t, out, "╭─ session")
+	assertContains(t, out, "bye")
+	if strings.Contains(out, "You> ") {
+		t.Fatalf("output still uses plain prompt: %q", out)
 	}
-	if !strings.Contains(out, "assistant> hi there") {
-		t.Fatalf("output missing assistant response: %q", out)
-	}
-	if !strings.Contains(out, "bye") {
-		t.Fatalf("output missing exit message: %q", out)
+	if strings.Contains(out, "assistant>") {
+		t.Fatalf("output still uses plain assistant prefix: %q", out)
 	}
 	if len(fake.requests) != 1 {
 		t.Fatalf("provider requests = %d, want 1", len(fake.requests))
@@ -48,17 +54,42 @@ func TestAppContinuesAfterProviderError(t *testing.T) {
 	}
 
 	out := output.String()
-	if !strings.Contains(out, "error: provider failed") {
-		t.Fatalf("output missing provider error: %q", out)
+	assertContains(t, out, "╭─ error")
+	assertContains(t, out, "provider failed")
+	assertContains(t, out, "bye")
+}
+
+func TestAppWrapsMultilineAssistantOutputInBox(t *testing.T) {
+	fake := &fakeProvider{chunks: []string{"first line\nsecond ", "line"}}
+	input := strings.NewReader("hello\n/exit\n")
+	output := new(strings.Builder)
+
+	app := New(input, output, chat.NewSession(), fake)
+	if err := app.Run(context.Background()); err != nil {
+		t.Fatalf("Run() error = %v", err)
 	}
-	if !strings.Contains(out, "bye") {
-		t.Fatalf("output missing exit message: %q", out)
+
+	out := output.String()
+	if got := strings.Count(out, "│ "); got < 4 {
+		t.Fatalf("output should render multiple bordered lines, got %d in %q", got, out)
+	}
+	assertContains(t, out, "first line")
+	assertContains(t, out, "second line")
+}
+
+func TestTrimToRunes(t *testing.T) {
+	if got := trimToRunes("hello", 10); got != "hello" {
+		t.Fatalf("trimToRunes short = %q", got)
+	}
+	if got := trimToRunes("abcdef", 4); got != "abc…" {
+		t.Fatalf("trimToRunes long = %q", got)
 	}
 }
 
 type fakeProvider struct {
 	requests []provider.ChatRequest
 	err      error
+	chunks   []string
 }
 
 func (f *fakeProvider) Name() string {
@@ -70,10 +101,16 @@ func (f *fakeProvider) Stream(_ context.Context, req provider.ChatRequest, emit 
 	if f.err != nil {
 		return f.err
 	}
-	if err := emit(provider.StreamEvent{Type: provider.EventTextDelta, Text: "hi"}); err != nil {
-		return err
+	chunks := f.chunks
+	if len(chunks) == 0 {
+		chunks = []string{"hi", " there"}
 	}
-	return emit(provider.StreamEvent{Type: provider.EventTextDelta, Text: " there"})
+	for _, chunk := range chunks {
+		if err := emit(provider.StreamEvent{Type: provider.EventTextDelta, Text: chunk}); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 var errProviderFailure = providerFailureError{}
@@ -82,4 +119,11 @@ type providerFailureError struct{}
 
 func (providerFailureError) Error() string {
 	return "provider failed"
+}
+
+func assertContains(t *testing.T, got, want string) {
+	t.Helper()
+	if !strings.Contains(got, want) {
+		t.Fatalf("output missing %q in %q", want, got)
+	}
 }
