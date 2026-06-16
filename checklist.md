@@ -1,0 +1,22 @@
+# C Code 对话 MVP 验收清单
+
+- [ ] `go test ./...` 通过。
+- [ ] `go build ./cmd/ccode` 能生成可运行的 CLI 二进制文件。
+- [ ] `configs/example.yaml` 包含必填字段 `protocol`、`model`、`base_url`、`api_key`。
+- [ ] 配置文件缺少 `protocol` 时，配置加载器会拒绝启动。
+- [ ] 配置文件缺少 `model` 时，配置加载器会拒绝启动。
+- [ ] 配置文件缺少 `base_url` 时，配置加载器会拒绝启动。
+- [ ] 配置文件缺少 `api_key` 时，配置加载器会拒绝启动。
+- [ ] `protocol: openai` 会选择 OpenAI Provider 实现。
+- [ ] `protocol: anthropic` 会选择 Anthropic Provider 实现。
+- [ ] 未知 `protocol` 值会在发起任何网络请求前失败。
+- [ ] 包含文本增量事件的 OpenAI stream fixture 能被解析为统一的助手文本片段。
+- [ ] 包含 `text_delta` 事件的 Anthropic stream fixture 能被解析为统一的助手文本片段。
+- [ ] 包含 `thinking_delta` 或 thinking block 事件的 Anthropic stream fixture 不会污染最终助手文本输出。
+- [ ] API Key 不会出现在普通日志、错误字符串或测试快照中。
+- [ ] 在同一个运行会话中，第二条用户消息可以引用第一轮用户/助手对话中的内容。
+- [ ] 终端 UI 允许用户输入提示词、提交提示词，并在完整回复结束前看到助手文本逐步出现。
+- [ ] 终端 UI 提供已文档化的退出方式，退出时不会额外发送模型请求。
+- [ ] 本阶段不存在工具调用、Shell 执行、文件编辑或仓库修改的实现路径。
+- [ ] 端到端：使用有效 OpenAI 配置和可用网络启动 C Code，发送 `Say hello in one short sentence`，终端会显示流式助手回复。
+- [ ] 端到端：使用有效 Anthropic 配置和可用网络启动 C Code，发送 `Say hello in one short sentence`，终端会显示流式助手回复。
