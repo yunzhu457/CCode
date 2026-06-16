@@ -2,6 +2,7 @@ package openai
 
 import (
 	"context"
+	"encoding/json"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -57,6 +58,9 @@ func TestClientStreamsTextDeltas(t *testing.T) {
 	if !strings.Contains(requestBody, `"stream":true`) {
 		t.Fatalf("request body does not enable streaming: %s", requestBody)
 	}
+	if !strings.Contains(requestBody, `"include_usage":true`) {
+		t.Fatalf("request body does not request streamed usage: %s", requestBody)
+	}
 }
 
 func TestClientStreamsReasoningAsThinking(t *testing.T) {
@@ -87,6 +91,54 @@ func TestClientStreamsReasoningAsThinking(t *testing.T) {
 	}
 	if thinking.String() != "think" || text.String() != "answer" {
 		t.Fatalf("thinking=%q text=%q", thinking.String(), text.String())
+	}
+}
+
+func TestClientStreamsToolCallsUsageAndEnd(t *testing.T) {
+	var requestBody string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		requestBody = string(body)
+
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte("data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_1\",\"type\":\"function\",\"function\":{\"name\":\"read_file\",\"arguments\":\"{\\\"pa\"}}]}}],\"usage\":null}\n\n"))
+		_, _ = w.Write([]byte("data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"function\":{\"arguments\":\"th\\\":\\\"main.go\\\"}\"}}]},\"finish_reason\":\"tool_calls\"}],\"usage\":null}\n\n"))
+		_, _ = w.Write([]byte("data: {\"choices\":[],\"usage\":{\"prompt_tokens\":7,\"completion_tokens\":3,\"total_tokens\":10}}\n\n"))
+		_, _ = w.Write([]byte("data: [DONE]\n\n"))
+	}))
+	defer server.Close()
+
+	client := New(config.Config{Protocol: config.ProtocolOpenAI, Model: "m", BaseURL: server.URL, APIKey: "k"})
+
+	events, err := collectStream(client, provider.ChatRequest{
+		Messages: []provider.Message{{Role: provider.RoleUser, Content: "read"}},
+		Tools: []provider.ToolSchema{{
+			Name:        "read_file",
+			Description: "Read a file",
+			InputSchema: json.RawMessage(`{"type":"object"}`),
+		}},
+	})
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+
+	assertHasEvent(t, events, provider.EventToolCallStart, func(event provider.StreamEvent) bool {
+		return event.ToolCall.ID == "call_1" && event.ToolCall.Name == "read_file"
+	})
+	assertHasEvent(t, events, provider.EventToolCallDelta, func(event provider.StreamEvent) bool {
+		return event.ToolCall.ArgumentsDelta == `{"pa`
+	})
+	assertHasEvent(t, events, provider.EventToolCallComplete, func(event provider.StreamEvent) bool {
+		return event.ToolCall.Arguments == `{"path":"main.go"}`
+	})
+	assertHasEvent(t, events, provider.EventUsage, func(event provider.StreamEvent) bool {
+		return event.Usage != nil && event.Usage.InputTokens == 7 && event.Usage.OutputTokens == 3 && event.Usage.TotalTokens == 10
+	})
+	assertHasEvent(t, events, provider.EventStreamEnd, func(event provider.StreamEvent) bool {
+		return event.StopReason == "tool_calls" && event.Usage != nil && event.Usage.TotalTokens == 10
+	})
+	if !strings.Contains(requestBody, `"tools"`) || !strings.Contains(requestBody, `"read_file"`) {
+		t.Fatalf("request body does not include tool schema: %s", requestBody)
 	}
 }
 
@@ -148,4 +200,24 @@ func TestOpenAIEndpoint(t *testing.T) {
 			t.Fatalf("openAIEndpoint(%q) = %q, want %q", tt.base, got, tt.want)
 		}
 	}
+}
+
+func collectStream(client *Client, req provider.ChatRequest) ([]provider.StreamEvent, error) {
+	var events []provider.StreamEvent
+	err := client.Stream(context.Background(), req, func(event provider.StreamEvent) error {
+		events = append(events, event)
+		return nil
+	})
+	return events, err
+}
+
+func assertHasEvent(t *testing.T, events []provider.StreamEvent, eventType provider.EventType, match func(provider.StreamEvent) bool) {
+	t.Helper()
+
+	for _, event := range events {
+		if event.Type == eventType && match(event) {
+			return
+		}
+	}
+	t.Fatalf("missing event %s in %+v", eventType, events)
 }

@@ -2,6 +2,7 @@ package anthropic
 
 import (
 	"context"
+	"encoding/json"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -74,6 +75,84 @@ func TestClientStreamsTextAndThinkingDeltas(t *testing.T) {
 	}
 }
 
+func TestClientStreamsThinkingCompleteToolCallsUsageAndEnd(t *testing.T) {
+	var requestBody string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		requestBody = string(body)
+
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte("event: message_start\n"))
+		_, _ = w.Write([]byte("data: {\"type\":\"message_start\",\"message\":{\"usage\":{\"input_tokens\":11,\"output_tokens\":1}}}\n\n"))
+		_, _ = w.Write([]byte("event: content_block_start\n"))
+		_, _ = w.Write([]byte("data: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"thinking\",\"thinking\":\"\"}}\n\n"))
+		_, _ = w.Write([]byte("event: content_block_delta\n"))
+		_, _ = w.Write([]byte("data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"thinking_delta\",\"thinking\":\"hidden\"}}\n\n"))
+		_, _ = w.Write([]byte("event: content_block_delta\n"))
+		_, _ = w.Write([]byte("data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"signature_delta\",\"signature\":\"sig_123\"}}\n\n"))
+		_, _ = w.Write([]byte("event: content_block_stop\n"))
+		_, _ = w.Write([]byte("data: {\"type\":\"content_block_stop\",\"index\":0}\n\n"))
+		_, _ = w.Write([]byte("event: content_block_start\n"))
+		_, _ = w.Write([]byte("data: {\"type\":\"content_block_start\",\"index\":1,\"content_block\":{\"type\":\"tool_use\",\"id\":\"toolu_1\",\"name\":\"read_file\",\"input\":{}}}\n\n"))
+		_, _ = w.Write([]byte("event: content_block_delta\n"))
+		_, _ = w.Write([]byte("data: {\"type\":\"content_block_delta\",\"index\":1,\"delta\":{\"type\":\"input_json_delta\",\"partial_json\":\"{\\\"path\\\":\\\"\"}}\n\n"))
+		_, _ = w.Write([]byte("event: content_block_delta\n"))
+		_, _ = w.Write([]byte("data: {\"type\":\"content_block_delta\",\"index\":1,\"delta\":{\"type\":\"input_json_delta\",\"partial_json\":\"main.go\\\"}\"}}\n\n"))
+		_, _ = w.Write([]byte("event: content_block_stop\n"))
+		_, _ = w.Write([]byte("data: {\"type\":\"content_block_stop\",\"index\":1}\n\n"))
+		_, _ = w.Write([]byte("event: message_delta\n"))
+		_, _ = w.Write([]byte("data: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"tool_use\",\"stop_sequence\":null},\"usage\":{\"output_tokens\":12}}\n\n"))
+		_, _ = w.Write([]byte("event: message_stop\n"))
+		_, _ = w.Write([]byte("data: {\"type\":\"message_stop\"}\n\n"))
+	}))
+	defer server.Close()
+
+	client := New(config.Config{
+		Protocol:  config.ProtocolAnthropic,
+		Model:     "m",
+		BaseURL:   server.URL,
+		APIKey:    "k",
+		MaxTokens: 4096,
+	})
+
+	events, err := collectStream(client, provider.ChatRequest{
+		Messages: []provider.Message{{Role: provider.RoleUser, Content: "read"}},
+		Tools: []provider.ToolSchema{{
+			Name:        "read_file",
+			Description: "Read a file",
+			InputSchema: json.RawMessage(`{"type":"object"}`),
+		}},
+	})
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+
+	assertHasEvent(t, events, provider.EventThinkingDelta, func(event provider.StreamEvent) bool {
+		return event.Thinking == "hidden"
+	})
+	assertHasEvent(t, events, provider.EventThinkingComplete, func(event provider.StreamEvent) bool {
+		return event.ThinkingSignature == "sig_123"
+	})
+	assertHasEvent(t, events, provider.EventToolCallStart, func(event provider.StreamEvent) bool {
+		return event.ToolCall.ID == "toolu_1" && event.ToolCall.Name == "read_file"
+	})
+	assertHasEvent(t, events, provider.EventToolCallDelta, func(event provider.StreamEvent) bool {
+		return event.ToolCall.ArgumentsDelta == `{"path":"`
+	})
+	assertHasEvent(t, events, provider.EventToolCallComplete, func(event provider.StreamEvent) bool {
+		return event.ToolCall.Arguments == `{"path":"main.go"}`
+	})
+	assertHasEvent(t, events, provider.EventUsage, func(event provider.StreamEvent) bool {
+		return event.Usage != nil && event.Usage.InputTokens == 11
+	})
+	assertHasEvent(t, events, provider.EventStreamEnd, func(event provider.StreamEvent) bool {
+		return event.StopReason == "tool_use" && event.Usage != nil && event.Usage.OutputTokens == 12
+	})
+	if !strings.Contains(requestBody, `"tools"`) || !strings.Contains(requestBody, `"read_file"`) {
+		t.Fatalf("request body does not include tool schema: %s", requestBody)
+	}
+}
+
 func TestClientReturnsStreamError(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/event-stream")
@@ -143,4 +222,24 @@ func TestAnthropicHelpers(t *testing.T) {
 	if got := anthropicEndpoint("https://api.anthropic.com/v1/messages"); got != "https://api.anthropic.com/v1/messages" {
 		t.Fatalf("anthropicEndpoint(existing) = %q", got)
 	}
+}
+
+func collectStream(client *Client, req provider.ChatRequest) ([]provider.StreamEvent, error) {
+	var events []provider.StreamEvent
+	err := client.Stream(context.Background(), req, func(event provider.StreamEvent) error {
+		events = append(events, event)
+		return nil
+	})
+	return events, err
+}
+
+func assertHasEvent(t *testing.T, events []provider.StreamEvent, eventType provider.EventType, match func(provider.StreamEvent) bool) {
+	t.Helper()
+
+	for _, event := range events {
+		if event.Type == eventType && match(event) {
+			return
+		}
+	}
+	t.Fatalf("missing event %s in %+v", eventType, events)
 }

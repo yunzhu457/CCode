@@ -9,7 +9,7 @@ import (
 
 	"github.com/yunzhu457/CCode/internal/chat"
 	"github.com/yunzhu457/CCode/internal/config"
-	"github.com/yunzhu457/CCode/internal/provider/factory"
+	"github.com/yunzhu457/CCode/internal/llm"
 	"github.com/yunzhu457/CCode/internal/tui"
 )
 
@@ -33,11 +33,11 @@ func run(args []string, stdin io.Reader, stdout io.Writer) error {
 		return err
 	}
 
-	p, err := factory.New(cfg)
+	client, err := llm.NewFromConfig(cfg)
 	if err != nil {
 		return err
 	}
 
-	app := tui.New(stdin, stdout, chat.NewSession(), p)
+	app := tui.New(stdin, stdout, chat.NewSession(), client)
 	return app.Run(context.Background())
 }

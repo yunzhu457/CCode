@@ -34,6 +34,7 @@ func (c *Client) Stream(ctx context.Context, req provider.ChatRequest, emit prov
 		Model:     c.cfg.Model,
 		MaxTokens: maxTokens(c.cfg.MaxTokens),
 		Messages:  anthropicMessages(req.Messages),
+		Tools:     anthropicTools(req.Tools),
 		Stream:    true,
 	}
 	if system := systemPrompt(req.Messages); system != "" {
@@ -75,10 +76,14 @@ func (c *Client) Stream(ctx context.Context, req provider.ChatRequest, emit prov
 	}
 
 	reader := sse.NewReader(resp.Body)
+	blockTypes := make(map[int]string)
+	toolCalls := make(map[int]*toolCallState)
+	var stopReason string
+	var usage *provider.Usage
 	for {
 		event, err := reader.Next()
 		if err == io.EOF {
-			return emit(provider.StreamEvent{Type: provider.EventDone})
+			return emit(provider.StreamEvent{Type: provider.EventStreamEnd, StopReason: stopReason, Usage: usage})
 		}
 		if err != nil {
 			return fmt.Errorf("read anthropic stream: %w", err)
@@ -95,8 +100,44 @@ func (c *Client) Stream(ctx context.Context, req provider.ChatRequest, emit prov
 			return fmt.Errorf("anthropic stream error: %s: %s", chunk.Error.Type, chunk.Error.Message)
 		}
 		switch chunk.Type {
+		case "message_start":
+			usage = anthropicUsage(chunk.Message.Usage)
+			if usage != nil {
+				if err := emit(provider.StreamEvent{Type: provider.EventUsage, Usage: usage}); err != nil {
+					return err
+				}
+			}
+		case "message_delta":
+			if chunk.Delta.StopReason != "" {
+				stopReason = chunk.Delta.StopReason
+			}
+			nextUsage := anthropicUsage(chunk.Usage)
+			if nextUsage != nil {
+				if usage != nil && nextUsage.InputTokens == 0 {
+					nextUsage.InputTokens = usage.InputTokens
+				}
+				usage = nextUsage
+				if err := emit(provider.StreamEvent{Type: provider.EventUsage, Usage: usage}); err != nil {
+					return err
+				}
+			}
 		case "message_stop":
-			return emit(provider.StreamEvent{Type: provider.EventDone})
+			return emit(provider.StreamEvent{Type: provider.EventStreamEnd, StopReason: stopReason, Usage: usage})
+		case "content_block_start":
+			blockTypes[chunk.Index] = chunk.ContentBlock.Type
+			if chunk.ContentBlock.Type == "tool_use" {
+				state := &toolCallState{
+					event: provider.ToolCallEvent{
+						Index: chunk.Index,
+						ID:    chunk.ContentBlock.ID,
+						Name:  chunk.ContentBlock.Name,
+					},
+				}
+				toolCalls[chunk.Index] = state
+				if err := emit(provider.StreamEvent{Type: provider.EventToolCallStart, ToolCall: state.event}); err != nil {
+					return err
+				}
+			}
 		case "content_block_delta":
 			switch chunk.Delta.Type {
 			case "text_delta":
@@ -111,7 +152,43 @@ func (c *Client) Stream(ctx context.Context, req provider.ChatRequest, emit prov
 						return err
 					}
 				}
+			case "signature_delta":
+				if chunk.Delta.Signature != "" {
+					if err := emit(provider.StreamEvent{
+						Type:              provider.EventThinkingComplete,
+						ThinkingSignature: chunk.Delta.Signature,
+					}); err != nil {
+						return err
+					}
+				}
+			case "input_json_delta":
+				if chunk.Delta.PartialJSON != "" {
+					state := toolCalls[chunk.Index]
+					if state == nil {
+						state = &toolCallState{event: provider.ToolCallEvent{Index: chunk.Index}}
+						toolCalls[chunk.Index] = state
+					}
+					state.arguments.WriteString(chunk.Delta.PartialJSON)
+					event := state.event
+					event.ArgumentsDelta = chunk.Delta.PartialJSON
+					if err := emit(provider.StreamEvent{Type: provider.EventToolCallDelta, ToolCall: event}); err != nil {
+						return err
+					}
+				}
 			}
+		case "content_block_stop":
+			if blockTypes[chunk.Index] == "tool_use" {
+				state := toolCalls[chunk.Index]
+				if state != nil {
+					event := state.event
+					event.Arguments = state.arguments.String()
+					if err := emit(provider.StreamEvent{Type: provider.EventToolCallComplete, ToolCall: event}); err != nil {
+						return err
+					}
+					delete(toolCalls, chunk.Index)
+				}
+			}
+			delete(blockTypes, chunk.Index)
 		}
 	}
 }
@@ -121,6 +198,7 @@ type anthropicRequest struct {
 	MaxTokens int                `json:"max_tokens"`
 	System    string             `json:"system,omitempty"`
 	Messages  []anthropicMessage `json:"messages"`
+	Tools     []anthropicTool    `json:"tools,omitempty"`
 	Stream    bool               `json:"stream"`
 	Thinking  *thinkingRequest   `json:"thinking,omitempty"`
 }
@@ -136,17 +214,42 @@ type anthropicMessage struct {
 	Content string `json:"content"`
 }
 
+type anthropicTool struct {
+	Name        string          `json:"name"`
+	Description string          `json:"description,omitempty"`
+	InputSchema json.RawMessage `json:"input_schema"`
+}
+
 type streamChunk struct {
-	Type  string `json:"type"`
+	Type    string `json:"type"`
+	Index   int    `json:"index"`
+	Message struct {
+		Usage *anthropicUsagePayload `json:"usage"`
+	} `json:"message"`
+	ContentBlock struct {
+		Type  string          `json:"type"`
+		ID    string          `json:"id"`
+		Name  string          `json:"name"`
+		Input json.RawMessage `json:"input"`
+	} `json:"content_block"`
 	Delta struct {
-		Type     string `json:"type"`
-		Text     string `json:"text"`
-		Thinking string `json:"thinking"`
+		Type        string `json:"type"`
+		Text        string `json:"text"`
+		Thinking    string `json:"thinking"`
+		Signature   string `json:"signature"`
+		PartialJSON string `json:"partial_json"`
+		StopReason  string `json:"stop_reason"`
 	} `json:"delta"`
+	Usage *anthropicUsagePayload `json:"usage"`
 	Error *struct {
 		Type    string `json:"type"`
 		Message string `json:"message"`
 	} `json:"error"`
+}
+
+type anthropicUsagePayload struct {
+	InputTokens  int `json:"input_tokens"`
+	OutputTokens int `json:"output_tokens"`
 }
 
 func anthropicMessages(messages []provider.Message) []anthropicMessage {
@@ -158,6 +261,27 @@ func anthropicMessages(messages []provider.Message) []anthropicMessage {
 		out = append(out, anthropicMessage{Role: string(msg.Role), Content: msg.Content})
 	}
 	return out
+}
+
+func anthropicTools(tools []provider.ToolSchema) []anthropicTool {
+	if len(tools) == 0 {
+		return nil
+	}
+
+	out := make([]anthropicTool, 0, len(tools))
+	for _, tool := range tools {
+		out = append(out, anthropicTool{
+			Name:        tool.Name,
+			Description: tool.Description,
+			InputSchema: toolInputSchema(tool.InputSchema),
+		})
+	}
+	return out
+}
+
+type toolCallState struct {
+	event     provider.ToolCallEvent
+	arguments strings.Builder
 }
 
 func systemPrompt(messages []provider.Message) string {
@@ -183,6 +307,24 @@ func anthropicEndpoint(baseURL string) string {
 		return base
 	}
 	return base + "/v1/messages"
+}
+
+func anthropicUsage(usage *anthropicUsagePayload) *provider.Usage {
+	if usage == nil {
+		return nil
+	}
+	return &provider.Usage{
+		InputTokens:  usage.InputTokens,
+		OutputTokens: usage.OutputTokens,
+		TotalTokens:  usage.InputTokens + usage.OutputTokens,
+	}
+}
+
+func toolInputSchema(schema json.RawMessage) json.RawMessage {
+	if len(schema) > 0 {
+		return schema
+	}
+	return json.RawMessage(`{"type":"object"}`)
 }
 
 func readLimited(r io.Reader) string {

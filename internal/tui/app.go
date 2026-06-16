@@ -11,6 +11,7 @@ import (
 	"unicode"
 
 	"github.com/yunzhu457/CCode/internal/chat"
+	"github.com/yunzhu457/CCode/internal/llm"
 	"github.com/yunzhu457/CCode/internal/provider"
 )
 
@@ -18,19 +19,19 @@ type App struct {
 	in          io.Reader
 	out         io.Writer
 	session     *chat.Session
-	provider    provider.Provider
+	client      llm.Client
 	style       style
 	inputEchoes bool
 	width       int
 	liveOutput  bool
 }
 
-func New(in io.Reader, out io.Writer, session *chat.Session, p provider.Provider) *App {
+func New(in io.Reader, out io.Writer, session *chat.Session, client llm.Client) *App {
 	return &App{
 		in:          in,
 		out:         out,
 		session:     session,
-		provider:    p,
+		client:      client,
 		style:       defaultStyle(),
 		inputEchoes: isTerminalFile(in),
 		width:       detectBoxWidth(out),
@@ -70,20 +71,23 @@ func (a *App) send(ctx context.Context, text string) error {
 	var response strings.Builder
 
 	stream := a.beginStreamBox("assistant")
-	err := a.provider.Stream(ctx, provider.ChatRequest{Messages: a.session.Messages()}, func(event provider.StreamEvent) error {
+	events, errs := a.client.Stream(ctx, a.session, nil)
+	for event := range events {
 		switch event.Type {
 		case provider.EventTextDelta:
 			response.WriteString(event.Text)
-			return stream.Write(event.Text)
+			if err := stream.Write(event.Text); err != nil {
+				stream.Close()
+				return err
+			}
 		case provider.EventThinkingDelta:
-			return nil
-		default:
-			return nil
 		}
-	})
+	}
 	stream.Close()
-	if err != nil {
-		return err
+	for err := range errs {
+		if err != nil {
+			return err
+		}
 	}
 	a.session.AddAssistantMessage(response.String())
 	return nil
@@ -123,7 +127,7 @@ func (a *App) renderWelcome() {
 		" #       #       #    #  #    #  #    ",
 		"  ####    ####    ####   #####   #####",
 		"",
-		"C CODE  ·  streaming chat  ·  provider: " + a.provider.Name(),
+		"C CODE  ·  streaming chat  ·  provider: " + a.client.Name(),
 		"Type /exit or /quit to leave the session.",
 	}
 	a.renderBox("c code terminal", lines, a.style.accent)

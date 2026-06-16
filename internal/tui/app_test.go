@@ -169,21 +169,31 @@ func (f *fakeProvider) Name() string {
 	return "fake"
 }
 
-func (f *fakeProvider) Stream(_ context.Context, req provider.ChatRequest, emit provider.EmitFunc) error {
+func (f *fakeProvider) Stream(_ context.Context, session *chat.Session, tools []provider.ToolSchema) (<-chan provider.StreamEvent, <-chan error) {
+	events := make(chan provider.StreamEvent, len(f.chunks)+4)
+	errs := make(chan error, 1)
+
+	f.stream(session, tools, events, errs)
+	close(events)
+	close(errs)
+
+	return events, errs
+}
+
+func (f *fakeProvider) stream(session *chat.Session, tools []provider.ToolSchema, events chan<- provider.StreamEvent, errs chan<- error) {
+	req := provider.ChatRequest{Messages: session.Messages(), Tools: tools}
 	f.requests = append(f.requests, req)
 	if f.err != nil {
-		return f.err
+		errs <- f.err
+		return
 	}
 	chunks := f.chunks
 	if len(chunks) == 0 {
 		chunks = []string{"hi", " there"}
 	}
 	for _, chunk := range chunks {
-		if err := emit(provider.StreamEvent{Type: provider.EventTextDelta, Text: chunk}); err != nil {
-			return err
-		}
+		events <- provider.StreamEvent{Type: provider.EventTextDelta, Text: chunk}
 	}
-	return nil
 }
 
 var errProviderFailure = providerFailureError{}
