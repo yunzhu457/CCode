@@ -4,7 +4,6 @@ import (
 	"context"
 	"strings"
 	"testing"
-	"unicode/utf8"
 
 	"github.com/yunzhu457/CCode/internal/chat"
 	"github.com/yunzhu457/CCode/internal/provider"
@@ -103,7 +102,7 @@ func TestAppWrapsLongAssistantTextAndCleansMarkdown(t *testing.T) {
 		if strings.HasPrefix(line, "│ ") && strings.Contains(line, "DeepSeek") && !strings.HasSuffix(line, " │") {
 			t.Fatalf("assistant line is missing right border: %q", line)
 		}
-		if strings.HasPrefix(line, "│ ") && utf8.RuneCountInString(line) > boxWidth {
+		if strings.HasPrefix(line, "│ ") && cellWidth(line) > boxWidth {
 			t.Fatalf("assistant line too wide: %q", line)
 		}
 	}
@@ -123,13 +122,41 @@ func TestInteractiveInputEndDoesNotAddExtraBlankLine(t *testing.T) {
 	}
 }
 
-func TestTrimToRunes(t *testing.T) {
-	if got := trimToRunes("hello", 10); got != "hello" {
-		t.Fatalf("trimToRunes short = %q", got)
+func TestTrimToCellsAndCellWidth(t *testing.T) {
+	if got := cellWidth("你好"); got != 4 {
+		t.Fatalf("cellWidth Chinese = %d, want 4", got)
 	}
-	if got := trimToRunes("abcdef", 4); got != "abc…" {
-		t.Fatalf("trimToRunes long = %q", got)
+	if got := trimToCells("hello", 10); got != "hello" {
+		t.Fatalf("trimToCells short = %q", got)
 	}
+	if got := trimToCells("你好abc", 5); got != "你好…" {
+		t.Fatalf("trimToCells wide = %q", got)
+	}
+}
+
+func TestLiveStreamBoxRedrawsCurrentLine(t *testing.T) {
+	output := new(strings.Builder)
+	stream := &streamBox{
+		out:   output,
+		color: "",
+		reset: "",
+		width: 20,
+		inner: 16,
+		live:  true,
+	}
+
+	if err := stream.Write("hello"); err != nil {
+		t.Fatalf("Write() error = %v", err)
+	}
+	if err := stream.Write(" world"); err != nil {
+		t.Fatalf("Write() error = %v", err)
+	}
+	stream.Close()
+
+	out := output.String()
+	assertContains(t, out, "\r\x1b[2K")
+	assertContains(t, out, "│ hello world")
+	assertContains(t, out, "╰──────────────────╯")
 }
 
 type fakeProvider struct {
