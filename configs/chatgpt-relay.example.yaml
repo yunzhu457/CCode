@@ -1,7 +1,10 @@
 # OpenAI-compatible relay example.
 # Copy this file to configs/config.local.yaml when you want to test a relay.
 
+provider: custom
 protocol: openai
+compatibility: auto
+api: auto
 model: YOUR_RELAY_MODEL
 base_url: https://your-relay.example.com/v1
 api_key: YOUR_API_KEY_HERE

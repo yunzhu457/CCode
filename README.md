@@ -13,18 +13,33 @@ cp configs/config.example.yaml configs/config.local.yaml
 编辑 `configs/config.local.yaml`：
 
 ```yaml
-protocol: openai
+provider: deepseek
+protocol: anthropic
+compatibility: auto
+api: auto
 model: deepseek-v4-flash
-base_url: https://api.deepseek.com
+base_url: https://api.deepseek.com/anthropic
 api_key: YOUR_API_KEY_HERE
 ```
 
 也可以参考 `configs/chatgpt-relay.example.yaml` 配置 OpenAI-compatible 中转服务。
 
+配置路由字段说明：
+
+- `provider`: 供应商标识，可选 `auto`、`openai`、`anthropic`、`deepseek`、`custom`。
+- `protocol`: 请求协议，当前支持 `openai` 和 `anthropic`。
+- `compatibility`: `auto` 会自动判断官方或兼容模式；非官方供应商和中转会降级到 compatible。
+- `api`: 默认 `auto`。OpenAI 协议可显式写 `chat_completions` 或 `responses`；Anthropic 协议可写 `messages`。
+
+当前版本已经实现 compatible 路径。官方 SDK / OpenAI Responses 的专用路径是预留模式；`auto` 会先使用现有可运行实现，显式写 `compatibility: official` 或 `api: responses` 时会提示该模式尚未实现。
+
 Anthropic Claude extended thinking 可以参考 `configs/anthropic-thinking.example.yaml`：
 
 ```yaml
+provider: anthropic
 protocol: anthropic
+compatibility: auto
+api: auto
 model: claude-sonnet-4-6
 base_url: https://api.anthropic.com
 api_key: YOUR_API_KEY_HERE

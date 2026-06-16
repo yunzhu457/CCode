@@ -15,13 +15,43 @@ const (
 	ProtocolAnthropic Protocol = "anthropic"
 )
 
+type ProviderName string
+
+const (
+	ProviderAuto      ProviderName = "auto"
+	ProviderOpenAI    ProviderName = "openai"
+	ProviderAnthropic ProviderName = "anthropic"
+	ProviderDeepSeek  ProviderName = "deepseek"
+	ProviderCustom    ProviderName = "custom"
+)
+
+type Compatibility string
+
+const (
+	CompatibilityAuto       Compatibility = "auto"
+	CompatibilityOfficial   Compatibility = "official"
+	CompatibilityCompatible Compatibility = "compatible"
+)
+
+type API string
+
+const (
+	APIAuto                  API = "auto"
+	APIOpenAIResponses       API = "responses"
+	APIOpenAIChatCompletions API = "chat_completions"
+	APIAnthropicMessages     API = "messages"
+)
+
 type Config struct {
-	Protocol  Protocol        `yaml:"protocol"`
-	Model     string          `yaml:"model"`
-	BaseURL   string          `yaml:"base_url"`
-	APIKey    string          `yaml:"api_key"`
-	MaxTokens int             `yaml:"max_tokens"`
-	Thinking  *ThinkingConfig `yaml:"thinking"`
+	Provider      ProviderName    `yaml:"provider"`
+	Protocol      Protocol        `yaml:"protocol"`
+	Compatibility Compatibility   `yaml:"compatibility"`
+	API           API             `yaml:"api"`
+	Model         string          `yaml:"model"`
+	BaseURL       string          `yaml:"base_url"`
+	APIKey        string          `yaml:"api_key"`
+	MaxTokens     int             `yaml:"max_tokens"`
+	Thinking      *ThinkingConfig `yaml:"thinking"`
 }
 
 type ThinkingConfig struct {
@@ -66,6 +96,21 @@ func (c Config) Validate() error {
 	if c.Protocol != ProtocolOpenAI && c.Protocol != ProtocolAnthropic {
 		return fmt.Errorf("unsupported protocol %q", c.Protocol)
 	}
+	switch c.Provider {
+	case "", ProviderAuto, ProviderOpenAI, ProviderAnthropic, ProviderDeepSeek, ProviderCustom:
+	default:
+		return fmt.Errorf("unsupported provider %q", c.Provider)
+	}
+	switch c.Compatibility {
+	case "", CompatibilityAuto, CompatibilityOfficial, CompatibilityCompatible:
+	default:
+		return fmt.Errorf("unsupported compatibility %q", c.Compatibility)
+	}
+	switch c.API {
+	case "", APIAuto, APIOpenAIResponses, APIOpenAIChatCompletions, APIAnthropicMessages:
+	default:
+		return fmt.Errorf("unsupported api %q", c.API)
+	}
 	if c.Thinking != nil {
 		if c.Thinking.BudgetTokens < 0 {
 			return fmt.Errorf("thinking budget_tokens must be non-negative")
@@ -84,5 +129,14 @@ func (c Config) Redacted() string {
 	if strings.TrimSpace(c.APIKey) != "" {
 		apiKey = "<set>"
 	}
-	return fmt.Sprintf("protocol:%s model:%s base_url:%s api_key:%s", c.Protocol, c.Model, c.BaseURL, apiKey)
+	return fmt.Sprintf(
+		"provider:%s protocol:%s compatibility:%s api:%s model:%s base_url:%s api_key:%s",
+		c.Provider,
+		c.Protocol,
+		c.Compatibility,
+		c.API,
+		c.Model,
+		c.BaseURL,
+		apiKey,
+	)
 }

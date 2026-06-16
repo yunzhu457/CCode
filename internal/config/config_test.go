@@ -93,7 +93,10 @@ base_url: https://api.deepseek.com
 
 func TestLoadSupportsAnthropicThinkingOptions(t *testing.T) {
 	path := writeConfig(t, `
+provider: anthropic
 protocol: anthropic
+compatibility: official
+api: messages
 model: claude-sonnet-4-6
 base_url: https://api.anthropic.com
 api_key: test-key
@@ -120,6 +123,96 @@ thinking:
 	}
 	if cfg.MaxTokens != 4096 {
 		t.Fatalf("MaxTokens = %d", cfg.MaxTokens)
+	}
+	if cfg.Provider != ProviderAnthropic {
+		t.Fatalf("Provider = %q", cfg.Provider)
+	}
+	if cfg.Compatibility != CompatibilityOfficial {
+		t.Fatalf("Compatibility = %q", cfg.Compatibility)
+	}
+	if cfg.API != APIAnthropicMessages {
+		t.Fatalf("API = %q", cfg.API)
+	}
+}
+
+func TestLoadSupportsCompatibilityRoutingFields(t *testing.T) {
+	path := writeConfig(t, `
+provider: deepseek
+protocol: anthropic
+compatibility: auto
+api: auto
+model: deepseek-v4-flash
+base_url: https://api.deepseek.com/anthropic
+api_key: test-key
+`)
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+
+	if cfg.Provider != ProviderDeepSeek {
+		t.Fatalf("Provider = %q", cfg.Provider)
+	}
+	if cfg.Compatibility != CompatibilityAuto {
+		t.Fatalf("Compatibility = %q", cfg.Compatibility)
+	}
+	if cfg.API != APIAuto {
+		t.Fatalf("API = %q", cfg.API)
+	}
+}
+
+func TestLoadRejectsInvalidRoutingFields(t *testing.T) {
+	tests := []struct {
+		name    string
+		content string
+		want    string
+	}{
+		{
+			name: "provider",
+			content: `
+provider: mystery
+protocol: openai
+model: m
+base_url: https://example.test
+api_key: k
+`,
+			want: "unsupported provider",
+		},
+		{
+			name: "compatibility",
+			content: `
+protocol: openai
+compatibility: maybe
+model: m
+base_url: https://example.test
+api_key: k
+`,
+			want: "unsupported compatibility",
+		},
+		{
+			name: "api",
+			content: `
+protocol: openai
+api: legacy
+model: m
+base_url: https://example.test
+api_key: k
+`,
+			want: "unsupported api",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := Load(writeConfig(t, tt.content))
+			if err == nil {
+				t.Fatal("Load() error = nil, want validation error")
+			}
+			if !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("Load() error = %q, want %q", err, tt.want)
+			}
+		})
 	}
 }
 

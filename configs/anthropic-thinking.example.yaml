@@ -1,7 +1,10 @@
 # Anthropic Claude example with extended thinking enabled.
 # Copy this file to configs/config.local.yaml when you want to test Claude.
 
+provider: anthropic
 protocol: anthropic
+compatibility: auto
+api: auto
 model: claude-sonnet-4-6
 base_url: https://api.anthropic.com
 api_key: YOUR_API_KEY_HERE
