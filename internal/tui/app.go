@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"strings"
 	"unicode/utf8"
 
@@ -14,20 +15,22 @@ import (
 )
 
 type App struct {
-	in       io.Reader
-	out      io.Writer
-	session  *chat.Session
-	provider provider.Provider
-	style    style
+	in          io.Reader
+	out         io.Writer
+	session     *chat.Session
+	provider    provider.Provider
+	style       style
+	inputEchoes bool
 }
 
 func New(in io.Reader, out io.Writer, session *chat.Session, p provider.Provider) *App {
 	return &App{
-		in:       in,
-		out:      out,
-		session:  session,
-		provider: p,
-		style:    defaultStyle(),
+		in:          in,
+		out:         out,
+		session:     session,
+		provider:    p,
+		style:       defaultStyle(),
+		inputEchoes: detectsTerminalEcho(in),
 	}
 }
 
@@ -126,7 +129,9 @@ func (a *App) renderInputPrompt() {
 }
 
 func (a *App) renderInputEnd() {
-	fmt.Fprintln(a.out)
+	if !a.inputEchoes {
+		fmt.Fprintln(a.out)
+	}
 	a.renderBottom(a.style.user)
 }
 
@@ -171,43 +176,59 @@ func (a *App) renderLine(line string, color string) {
 func (a *App) beginStreamBox(title string) *streamBox {
 	a.renderTop(title, a.style.accent)
 	return &streamBox{
-		out:         a.out,
-		color:       a.style.accent,
-		reset:       a.style.reset,
-		atLineStart: true,
+		out:   a.out,
+		color: a.style.accent,
+		reset: a.style.reset,
 	}
 }
 
 type streamBox struct {
-	out         io.Writer
-	color       string
-	reset       string
-	atLineStart bool
+	out       io.Writer
+	color     string
+	reset     string
+	line      strings.Builder
+	wroteLine bool
 }
 
 func (b *streamBox) Write(text string) error {
-	for _, r := range text {
-		if b.atLineStart {
-			if _, err := fmt.Fprintf(b.out, "%s│ %s", b.color, b.reset); err != nil {
+	for _, r := range cleanStreamText(text) {
+		switch r {
+		case '\r':
+			continue
+		case '\n':
+			if err := b.flushLine(); err != nil {
 				return err
 			}
-			b.atLineStart = false
+			continue
 		}
-		if _, err := fmt.Fprint(b.out, string(r)); err != nil {
-			return err
-		}
-		if r == '\n' {
-			b.atLineStart = true
+
+		b.line.WriteRune(r)
+		if utf8.RuneCountInString(b.line.String()) >= boxInner {
+			if err := b.flushLine(); err != nil {
+				return err
+			}
 		}
 	}
 	return nil
 }
 
 func (b *streamBox) Close() {
-	if !b.atLineStart {
-		fmt.Fprintln(b.out)
+	if b.line.Len() > 0 || !b.wroteLine {
+		_ = b.flushLine()
 	}
 	fmt.Fprintf(b.out, "%s╰%s╯%s\n", b.color, strings.Repeat("─", boxWidth-2), b.reset)
+}
+
+func (b *streamBox) flushLine() error {
+	line := b.line.String()
+	b.line.Reset()
+	padding := boxInner - utf8.RuneCountInString(line)
+	if padding < 0 {
+		padding = 0
+	}
+	_, err := fmt.Fprintf(b.out, "%s│ %s%s │%s\n", b.color, line, strings.Repeat(" ", padding), b.reset)
+	b.wroteLine = true
+	return err
 }
 
 func trimToRunes(value string, max int) string {
@@ -225,4 +246,35 @@ func trimToRunes(value string, max int) string {
 	}
 	out.WriteRune('…')
 	return out.String()
+}
+
+func detectsTerminalEcho(in io.Reader) bool {
+	file, ok := in.(*os.File)
+	if !ok {
+		return false
+	}
+	info, err := file.Stat()
+	if err != nil {
+		return false
+	}
+	return info.Mode()&os.ModeCharDevice != 0
+}
+
+func cleanStreamText(value string) string {
+	value = strings.ReplaceAll(value, "**", "")
+	value = strings.ReplaceAll(value, "__", "")
+	value = strings.ReplaceAll(value, "`", "")
+
+	var out strings.Builder
+	for _, r := range value {
+		if isEmojiRune(r) {
+			continue
+		}
+		out.WriteRune(r)
+	}
+	return out.String()
+}
+
+func isEmojiRune(r rune) bool {
+	return (r >= 0x1F000 && r <= 0x1FAFF) || r == 0xFE0F
 }

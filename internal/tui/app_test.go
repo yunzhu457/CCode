@@ -4,6 +4,7 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/yunzhu457/CCode/internal/chat"
 	"github.com/yunzhu457/CCode/internal/provider"
@@ -77,6 +78,51 @@ func TestAppWrapsMultilineAssistantOutputInBox(t *testing.T) {
 	assertContains(t, out, "second line")
 }
 
+func TestAppWrapsLongAssistantTextAndCleansMarkdown(t *testing.T) {
+	long := "我是 **DeepSeek**，这是一个很长很长的回答，用来验证输出框不会被撑破，也不会把 markdown 标记和 emoji 原样丢给用户 😊。"
+	fake := &fakeProvider{chunks: []string{long}}
+	input := strings.NewReader("hello\n/exit\n")
+	output := new(strings.Builder)
+
+	app := New(input, output, chat.NewSession(), fake)
+	if err := app.Run(context.Background()); err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+
+	out := output.String()
+	assertContains(t, out, "DeepSeek")
+	if strings.Contains(out, "**") {
+		t.Fatalf("output leaked markdown emphasis markers: %q", out)
+	}
+	if strings.Contains(out, "😊") {
+		t.Fatalf("output leaked emoji: %q", out)
+	}
+
+	lines := strings.Split(stripANSI(out), "\n")
+	for _, line := range lines {
+		if strings.HasPrefix(line, "│ ") && strings.Contains(line, "DeepSeek") && !strings.HasSuffix(line, " │") {
+			t.Fatalf("assistant line is missing right border: %q", line)
+		}
+		if strings.HasPrefix(line, "│ ") && utf8.RuneCountInString(line) > boxWidth {
+			t.Fatalf("assistant line too wide: %q", line)
+		}
+	}
+}
+
+func TestInteractiveInputEndDoesNotAddExtraBlankLine(t *testing.T) {
+	output := new(strings.Builder)
+	app := New(strings.NewReader(""), output, chat.NewSession(), &fakeProvider{})
+	app.inputEchoes = true
+
+	app.renderInputPrompt()
+	app.renderInputEnd()
+
+	out := output.String()
+	if strings.Contains(out, "│ › \x1b[0m\n") {
+		t.Fatalf("interactive input end should not add a second newline after terminal echo: %q", out)
+	}
+}
+
 func TestTrimToRunes(t *testing.T) {
 	if got := trimToRunes("hello", 10); got != "hello" {
 		t.Fatalf("trimToRunes short = %q", got)
@@ -126,4 +172,23 @@ func assertContains(t *testing.T, got, want string) {
 	if !strings.Contains(got, want) {
 		t.Fatalf("output missing %q in %q", want, got)
 	}
+}
+
+func stripANSI(value string) string {
+	var out strings.Builder
+	inEscape := false
+	for _, r := range value {
+		if r == '\x1b' {
+			inEscape = true
+			continue
+		}
+		if inEscape {
+			if r == 'm' {
+				inEscape = false
+			}
+			continue
+		}
+		out.WriteRune(r)
+	}
+	return out.String()
 }
